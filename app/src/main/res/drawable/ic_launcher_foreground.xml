@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Ring shape (outer) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,24
+            A30,30 0 1,1 53.99,24
+            Z"
+        android:strokeWidth="0" />
+
+    <!-- Ring hole (inner) -->
+    <path
+        android:fillColor="#1A1A2E"
+        android:pathData="M54,34
+            A20,20 0 1,1 53.99,34
+            Z"
+        android:strokeWidth="0" />
+
+    <!-- Gesture indicator - two small dots representing pinch -->
+    <path
+        android:fillColor="#00D4AA"
+        android:pathData="M44,54 A3,3 0 1,1 43.99,54 Z" />
+    <path
+        android:fillColor="#00D4AA"
+        android:pathData="M64,54 A3,3 0 1,1 63.99,54 Z" />
+
+    <!-- Connection arcs between dots -->
+    <path
+        android:strokeColor="#00D4AA"
+        android:strokeWidth="1.5"
+        android:fillColor="#00000000"
+        android:pathData="M47,52 Q54,46 61,52" />
+    <path
+        android:strokeColor="#00D4AA"
+        android:strokeWidth="1"
+        android:fillColor="#00000000"
+        android:pathData="M48,49 Q54,44 60,49" />
+
+</vector>
