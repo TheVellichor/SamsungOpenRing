@@ -61,6 +61,34 @@ class MainActivity : AppCompatActivity() {
 
         webhookInput.setText(prefs.getString(KEY_WEBHOOK_URL, ""))
 
+        // Shizuku
+        val shizukuStatus = findViewById<TextView>(R.id.shizukuStatus)
+        shizukuStatus.text = ShizukuHelper.getStatusText(this)
+
+        findViewById<MaterialButton>(R.id.shizukuGrantButton).setOnClickListener {
+            if (!ShizukuHelper.isShizukuInstalled(this)) {
+                shizukuStatus.text = "Shizuku not installed. Install from Play Store."
+                return@setOnClickListener
+            }
+            if (!ShizukuHelper.isShizukuRunning()) {
+                shizukuStatus.text = "Shizuku not running. Open Shizuku app and start it."
+                return@setOnClickListener
+            }
+            if (!ShizukuHelper.hasShizukuPermission()) {
+                ShizukuHelper.requestPermission { granted ->
+                    runOnUiThread {
+                        if (granted) {
+                            grantReadLogsViaShizuku(shizukuStatus)
+                        } else {
+                            shizukuStatus.text = "Shizuku permission denied"
+                        }
+                    }
+                }
+                return@setOnClickListener
+            }
+            grantReadLogsViaShizuku(shizukuStatus)
+        }
+
         // Load existing log
         eventLog.text = EventLog.getRecentLines(this)
 
@@ -424,6 +452,18 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton("Cancel", null)
             .show()
+    }
+
+    private fun grantReadLogsViaShizuku(statusView: TextView) {
+        statusView.text = "Granting READ_LOGS..."
+        Thread {
+            ShizukuHelper.grantReadLogs(packageName) { success, message ->
+                runOnUiThread {
+                    statusView.text = if (success) "READ_LOGS granted!" else "Failed: $message"
+                    EventLog.log(this, "Shizuku: $message")
+                }
+            }
+        }.start()
     }
 
     private fun saveWebhookUrl() {

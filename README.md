@@ -16,7 +16,7 @@ The Samsung Galaxy Ring's BLE protocol was reverse-engineered from the companion
 
 **No root required.** No modifications to Samsung's app. No ADB setup for basic functionality.
 
-See [RFC-SGR-001](../RFC-SGR-001-Samsung-Galaxy-Ring-Protocol.md) for the full protocol specification.
+A detailed protocol specification (RFC-SGR-001) is available in the project documentation.
 
 ## Features
 
@@ -115,7 +115,7 @@ The Galaxy Ring uses a proprietary BLE protocol built on Samsung's Accessory Pro
 - **Disable gestures:** Write `0x16 0x16 0x01` to TX characteristic
 - **Gesture event:** Notification `0x16 0x16 0x02 [counter] 0x00 0x00 0x00`
 
-Full protocol specification: [RFC-SGR-001](../RFC-SGR-001-Samsung-Galaxy-Ring-Protocol.md)
+Full protocol specification available in project documentation (RFC-SGR-001).
 
 ## Disclaimer
 

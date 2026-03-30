@@ -7,6 +7,7 @@ material = "1.12.0"
 appcompat = "1.7.0"
 constraintlayout = "2.2.1"
 gson = "2.11.0"
+shizuku-api = "13.1.5"
 
 [libraries]
 okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
@@ -15,6 +16,8 @@ material = { module = "com.google.android.material:material", version.ref = "mat
 appcompat = { module = "androidx.appcompat:appcompat", version.ref = "appcompat" }
 constraintlayout = { module = "androidx.constraintlayout:constraintlayout", version.ref = "constraintlayout" }
 gson = { module = "com.google.code.gson:gson", version.ref = "gson" }
+shizuku-api = { module = "dev.rikka.shizuku:api", version.ref = "shizuku-api" }
+shizuku-provider = { module = "dev.rikka.shizuku:provider", version.ref = "shizuku-api" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
