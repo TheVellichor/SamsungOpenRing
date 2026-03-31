@@ -128,8 +128,10 @@ class ScheduleTrigger(
         val nextStart = nextOccurrence(startHour, startMinute)
         val nextEnd = nextOccurrence(endHour, endMinute)
 
-        alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, nextStart, startIntent)
-        alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, nextEnd, endIntent)
+        // Use inexact alarms — exact alarms require special permission on Android 12+
+        // and aren't critical for schedule triggers (a few minutes of drift is fine)
+        alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, nextStart, startIntent)
+        alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, nextEnd, endIntent)
     }
 
     private fun cancelAlarms(context: Context) {
