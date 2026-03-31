@@ -54,7 +54,7 @@ class AndroidAutoTrigger : Trigger {
             addAction(ACTION_CAR_CONNECTED)
             addAction(ACTION_CAR_DISCONNECTED)
         }
-        context.registerReceiver(receiver, filter)
+        context.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
 
         // Check if already in car mode
         val uiModeManager = context.getSystemService(Context.UI_MODE_SERVICE) as? UiModeManager

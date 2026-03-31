@@ -60,7 +60,7 @@ class BluetoothTrigger(
             addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
             addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
         }
-        context.registerReceiver(receiver, filter)
+        context.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
         armed = true
         Log.d(TAG, "Armed for $targetName ($targetAddress)")
     }

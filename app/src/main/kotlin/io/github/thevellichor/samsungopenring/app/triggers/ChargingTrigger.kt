@@ -51,7 +51,7 @@ class ChargingTrigger : Trigger {
             addAction(Intent.ACTION_POWER_CONNECTED)
             addAction(Intent.ACTION_POWER_DISCONNECTED)
         }
-        context.registerReceiver(receiver, filter)
+        context.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
 
         // Check current charging state
         val batteryManager = context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
