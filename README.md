@@ -125,6 +125,12 @@ The Galaxy Ring uses a proprietary BLE protocol built on Samsung's Accessory Pro
 
 Full protocol specification: [RFC-SGR-001](docs/RFC-SGR-001-Samsung-Galaxy-Ring-Protocol.md)
 
+## Disclaimer
+
+This project is not affiliated with, endorsed by, or sponsored by Samsung Electronics. "Samsung" and "Galaxy Ring" are trademarks of Samsung Electronics Co., Ltd.
+
+This software interacts with the Galaxy Ring using the same BLE commands that Samsung's official companion app uses. However, **use at your own risk**. The authors take no responsibility for any impact on your ring's functionality, battery life, or warranty.
+
 ## License
 
 MIT -- see [LICENSE](LICENSE)
