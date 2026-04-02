@@ -27,6 +27,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var prefs: SharedPreferences
     private lateinit var statusText: TextView
     private lateinit var webhookInput: TextInputEditText
+    private lateinit var palgateSessionToken: TextInputEditText
+    private lateinit var palgateUserId: TextInputEditText
+    private lateinit var palgateDeviceId: TextInputEditText
     private lateinit var triggersList: LinearLayout
     private lateinit var triggersEmpty: TextView
     private lateinit var eventLog: TextView
@@ -60,10 +63,31 @@ class MainActivity : AppCompatActivity() {
         webhookInput.setText(prefs.getString(KEY_WEBHOOK_URL, ""))
         eventLog.text = EventLog.getRecentLines(this)
 
+        // --- Palgate ---
+        palgateSessionToken = findViewById(R.id.palgateSessionToken)
+        palgateUserId = findViewById(R.id.palgateUserId)
+        palgateDeviceId = findViewById(R.id.palgateDeviceId)
+
+        val (savedToken, savedUserId, savedDeviceId) = PalgateGateOpener.getConfig(this)
+        palgateSessionToken.setText(savedToken)
+        palgateUserId.setText(savedUserId)
+        palgateDeviceId.setText(savedDeviceId)
+
+        findViewById<MaterialButton>(R.id.palgateTestButton).setOnClickListener {
+            savePalgateConfig()
+            statusText.text = "Opening gate..."
+            PalgateGateOpener.openGate(this) { success, detail ->
+                runOnUiThread {
+                    statusText.text = if (success) "Gate opened ($detail)" else "Gate failed: $detail"
+                }
+            }
+        }
+
         // --- Manual Control ---
         findViewById<MaterialButton>(R.id.startButton).setOnClickListener {
             ensureBluetooth {
                 saveWebhookUrl()
+                savePalgateConfig()
                 GestureService.start(this)
                 statusText.text = "Starting..."
             }
@@ -485,6 +509,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun saveWebhookUrl() {
         prefs.edit().putString(KEY_WEBHOOK_URL, webhookInput.text.toString().trim()).apply()
+    }
+
+    private fun savePalgateConfig() {
+        PalgateGateOpener.saveConfig(
+            this,
+            palgateSessionToken.text.toString().trim(),
+            palgateUserId.text.toString().trim(),
+            palgateDeviceId.text.toString().trim()
+        )
     }
 
     private fun exportLog() {

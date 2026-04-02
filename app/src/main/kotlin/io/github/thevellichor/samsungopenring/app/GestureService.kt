@@ -70,6 +70,18 @@ class GestureService : Service() {
                             }
                         }
                     }
+
+                    if (PalgateGateOpener.isConfigured(this@GestureService)) {
+                        log("Opening Palgate gate...")
+                        PalgateGateOpener.openGate(this@GestureService) { success, detail ->
+                            if (success) {
+                                log("Gate opened ($detail)")
+                                updateNotification("Gate opened!")
+                            } else {
+                                log("Gate FAILED: $detail")
+                            }
+                        }
+                    }
                 }
             }
 
