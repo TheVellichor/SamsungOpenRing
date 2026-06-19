@@ -65,6 +65,7 @@ Table of Contents
    15. Security Considerations  . . . . . . . . . . . . . . . . . . 33
    16. References . . . . . . . . . . . . . . . . . . . . . . . . . 35
    Appendix A.  Observed Wire Traces  . . . . . . . . . . . . . . . 36
+   Appendix B.  Live Validation (Second-Client Probe) . . . . . . . 38
 
 
 1.  Introduction
@@ -103,16 +104,24 @@ Table of Contents
 
 1.3.  Methodology
 
-   The protocol was reverse-engineered through two complementary
+   The protocol was reverse-engineered through three complementary
    methods.  First, the Galaxy Ring Manager APK
    (com.samsung.android.ringplugin, hardware version 1401.1019) was
    decompiled using JADX and analyzed statically.  Second, BLE traffic
    between a Galaxy Ring (SM-Q509, firmware 19.5) and a Galaxy S24 Ultra
    was captured using Android's Bluetooth HCI snoop log facility and
-   analyzed with Wireshark.
+   analyzed with Wireshark.  Third, in June 2026, a live second GATT
+   client (connecting alongside the official application) was used to
+   actively probe the ring -- enumerating its full GATT database,
+   issuing commands, performing characteristic reads, and observing the
+   notification stream in real time.  This third method validated and
+   corrected several earlier inferences; its results are consolidated in
+   Appendix B.
 
    All byte sequences and protocol constants presented in this document
-   were verified against both sources unless otherwise noted.
+   were verified against these sources unless otherwise noted.  Where the
+   live validation in Appendix B contradicts an earlier inference, the
+   text has been corrected in place and the change noted.
 
 
 2.  Terminology
@@ -192,28 +201,53 @@ Table of Contents
 
 4.1.  GATT Services
 
-   The ring exposes three GATT services:
+   Live GATT discovery (Appendix B.1) shows the ring exposes ten
+   services -- a mix of standard Bluetooth SIG services and four
+   proprietary ones:
 
-      Data Service      00001b1b-0000-1000-8000-00805f9b34fb
-      FOTA Service      00001b1a-0000-1000-8000-00805f9b34fb
-      General Service   00001801-0000-1000-8000-00805f9b34fb
+      00001800  Generic Access          (Device Name, Appearance)
+      00001801  Generic Attribute       (Service Changed)
+      0000180a  Device Information      (Manufacturer Name only)
+      0000180d  Heart Rate              (live HR Measurement, see B.3)
+      0000180f  (not present on this unit; battery is proprietary)
+      00001b1a  Samsung FOTA            (firmware transfer)
+      00001b1b  Samsung DATA            (all protocol traffic)
+      79d34772-bc93-4360-8244-42b50a4a2b27  (proprietary)
+      eedd5e73-6aa8-4673-8219-398a489da87c  (proprietary)
+      0000fff0  (proprietary)
+      0000fd69  (proprietary)
 
-   The Data Service carries all protocol traffic.  The FOTA Service is
-   used exclusively for firmware transfers.  The General Service is the
-   standard GATT service containing the Service Changed characteristic.
+   The Data Service (1b1b) carries all channel-multiplexed protocol
+   traffic.  The FOTA Service (1b1a) is used exclusively for firmware
+   transfers and exposes the same two characteristic UUIDs as the Data
+   Service.  Notably, the ring ALSO presents a standard Heart Rate
+   Service, allowing any GATT client to read live heart rate without the
+   proprietary protocol (Appendix B.3).  The earlier inference of "three
+   services" reflected only those referenced by the companion app.
 
 4.2.  Characteristics
 
    Within the Data Service, two characteristics carry all application
    data:
 
-      TX (Write)    797ae4e9-2e58-4fe8-b48d-b5c79599fb9b
-      RX (Notify)   63e30bad-4206-4596-839f-e47cbf7a4b5d
+      Notify (Ring->Host)   797ae4e9-2e58-4fe8-b48d-b5c79599fb9b
+      Write  (Host->Ring)   63e30bad-4206-4596-839f-e47cbf7a4b5d
 
-   The TX characteristic accepts Write Without Response (ATT opcode
-   0x52) and Write Request (ATT opcode 0x12) operations from the host.
-   The RX characteristic delivers data from the ring via Handle Value
-   Notification (ATT opcode 0x1b).
+   CORRECTION (validated live, Appendix B.2): earlier revisions of this
+   document labelled these the other way around (797ae4e9 as the write
+   characteristic).  Live discovery shows 797ae4e9 has properties
+   Read + Notify (0x12) and is the characteristic on which ALL ring-to-
+   host notifications arrive (gesture events, battery, heartbeat), while
+   63e30bad has property Write-Without-Response (0x04) and is the target
+   of all host-to-ring writes.
+
+   The Write characteristic (63e30bad) accepts Write Without Response
+   (ATT opcode 0x52) operations from the host.  The Notify characteristic
+   (797ae4e9) delivers data from the ring via Handle Value Notification
+   (ATT opcode 0x1b) and is also readable.  An implementation MUST select
+   the write characteristic by its Write-Without-Response property rather
+   than by hardcoded UUID role, as the role labels were historically
+   reversed.
 
    A Client Characteristic Configuration Descriptor (UUID 0x2902) is
    associated with the RX characteristic.  The host MUST write the value
@@ -863,6 +897,21 @@ Table of Contents
       7          CRADLE_BATTERY_LEVEL_INFO     BYTE (0-100)
       8          CRADLE_BATTERY_CHARGING_INFO  BOOLEAN
 
+   The host requests a battery report by writing the three-byte message
+   0x0b 0x0b 0x03 (Channel 11, MSG_SEND_BATTERY_SYNC).  This request is
+   serviced even for a second (non-primary) GATT client.  Validated wire
+   form of the report (live):
+
+      0b 0b 42 06 00 05 3f 07 ff 08 ff
+
+   Byte 2 is the SAP header.  The ring has been observed using BOTH 0x02
+   (request form) and 0x42 (response form, with the Type/response bit
+   set) for this message; a parser SHOULD match on the low six bits
+   (header & 0x3F == 0x02).  Decoding the remainder as parameter pairs:
+   param 6 (charging) = 0x00 (false), param 5 (level) = 0x3f = 63%,
+   param 7 = 0xff and param 8 = 0xff, where 0xff indicates the cradle
+   field is not present (ring off-cradle).
+
 10.4.  Time Synchronization
 
    The host SHOULD send an RTC synchronization message (MSG_ID 0) to
@@ -1181,6 +1230,12 @@ A.1.  Device Configuration (Ring -> Host)
       Device Name:   "Galaxy Ring"
       Model:         "Q500"
 
+   A live read of the standard Generic Access Device Name characteristic
+   (0x2A00) on the same unit returned "Galaxy Ring (NGYF)", where the
+   parenthesised suffix is a per-device Bluetooth name token.  A live
+   read of the Device Information Manufacturer Name characteristic
+   (0x2A29) returned "Samsung Electronics", confirming the value above.
+
 A.2.  Gesture Detection Sequence
 
    Ten gesture events captured with a 30-second gap between groups:
@@ -1211,6 +1266,303 @@ A.3.  Configuration Key-Value Store (Ring -> Host)
       RING0005     "5887"             Unknown identifier
       RING0009     "283"              Battery capacity (mAh)
       RING0012     "1 55 M 2"         Size/dimension metadata
+
+
+Appendix B.  Live Validation (Second-Client Probe)
+
+   This appendix records observations made in June 2026 by connecting a
+   second BLE GATT client to the ring concurrently with the official
+   Samsung application, and actively probing it (full service discovery,
+   characteristic reads, command writes, and live notification capture).
+   The ring (Bluetooth address D0:56:FB:71:B3:67) was bonded through the
+   official app; the second client reused that bond.  The host was a
+   Galaxy S24 Ultra (SM-S928B) running Android 16.
+
+B.1.  Full GATT Database
+
+   Service / Characteristic                       Properties
+   ----------------------------------------       ----------
+   1800 Generic Access
+     2a00 Device Name                             Read
+     2a01 Appearance                              Read
+   1801 Generic Attribute
+     2a05 Service Changed                         Indicate
+   180a Device Information
+     2a29 Manufacturer Name                       Read
+   180d Heart Rate
+     2a37 Heart Rate Measurement                  Notify
+   1b1a Samsung FOTA
+     797ae4e9...                                  Read, Notify
+     63e30bad...                                  Write No Response
+   79d34772-bc93-4360-8244-42b50a4a2b27
+     2fb6a5aa...                                  Write, Notify
+   1b1b Samsung DATA
+     797ae4e9...                                  Read, Notify
+     63e30bad...                                  Write No Response
+   eedd5e73-6aa8-4673-8219-398a489da87c
+     4ebe81f6...                                  Write, Notify
+     a12be31c...                                  Read   (rolling, see B.8)
+     50f98bfd...                                  Read   (rolling, see B.8)
+   fff0
+     fff1...                                      Notify
+     fff2...                                      Write, Write No Response
+   fd69
+     4af351bb...                                  Read, Write, Indicate
+     66aeea2f...                                  Read, Write, Indicate
+
+   Characteristics 4af351bb and 66aeea2f each read back as a single 0x00
+   octet.  The read-only pair a12be31c and 50f98bfd is NOT a static
+   identifier as first supposed; it returns a fresh value on every read
+   and is analysed in Appendix B.8.
+
+B.2.  Characteristic Role Correction
+
+   On characteristic 797ae4e9 (properties Read+Notify, 0x12) the ring
+   delivered every observed notification -- gesture enable ACKs, pinch
+   detections, the Channel 23 heartbeat, and Channel 11 battery reports.
+   All host commands were written to 63e30bad (property Write No
+   Response, 0x04) and were honoured.  This reverses the TX/RX role
+   labels of Section 4.2 as originally published; the section has been
+   corrected.
+
+B.3.  Standard Heart Rate Service
+
+   The ring exposes a standard Bluetooth Heart Rate Service (180d).  Its
+   Heart Rate Measurement characteristic (2a37) emits notifications in
+   the standard format, for example:
+
+      06 4a 00 00 00 00
+
+   Byte 0 (0x06) is the Flags field: HR value format = UINT8, sensor
+   contact feature supported and contact detected.  Byte 1 (0x4a = 74)
+   is the heart rate in beats per minute.  Any GATT client may subscribe
+   to live heart rate this way, independent of the proprietary Channel
+   10 health protocol.
+
+B.4.  Second-Client Capability Matrix
+
+   Connecting as a non-primary bonded client, the following operations
+   were observed:
+
+      Operation                                 Result
+      ---------                                 ------
+      Subscribe to notifications (all CCCDs)    Permitted
+      Receive gesture events (Channel 22)       Broadcast to client
+      Receive heartbeat (Channel 23)            Broadcast to client
+      Receive heart rate (180d / 2a37)          Broadcast to client
+      Enable/disable gestures (Ch 22)           Honoured and ACKed
+      Battery sync request (0b 0b 03)           Serviced; report returned
+      GATT characteristic reads                 Permitted
+      Ring temperature query (Ch 11 MSG 5)      No response
+      Cradle info query (Ch 11 MSG 4/6)         No response
+      Debug channel queries (Channel 12)        No response
+
+   The ring thus treats a secondary client as a first-class consumer of
+   the notification stream and of gesture and battery messaging, but
+   does not service diagnostic or auxiliary settings queries for it;
+   those appear reserved to the primary (official-app) connection.
+
+B.5.  Connection Parameters
+
+   A request for the low-power connection priority (Android
+   CONNECTION_PRIORITY_LOW_POWER, a longer connection interval) was
+   accepted by the link.  Gesture-event and notification delivery
+   continued normally at the relaxed interval.
+
+B.6.  Channel Envelope Validation
+
+   Writes omitting the doubled channel prefix produced no response: the
+   single-octet 0x03 and the partial 0x0b 0x03 were silently ignored,
+   while the correctly doubled 0x0b 0x0b 0x03 was serviced.  This
+   confirms the two-octet channel envelope requirement of Section 6.3.
+
+B.7.  Gesture Counter
+
+   The gesture detection counter (Section 8.6, wire byte 3) was observed
+   incrementing monotonically and persistently across a session, with
+   values exceeding those in the original capture (up to 0x18 and
+   beyond), consistent with a per-connection running counter.
+
+B.8.  Rolling Challenge Characteristic (eedd5e73)
+
+   The proprietary service eedd5e73-6aa8-4673-8219-398a489da87c contains
+   two read-only characteristics, a12be31c and 50f98bfd, plus a third
+   characteristic 4ebe81f6 with properties Write + Notify.
+
+   The two read-only characteristics return a 16-octet value that is
+   identical to each other at any given instant but is REGENERATED on
+   every read.  Statistical analysis of consecutive reads showed:
+
+      o  Each octet is bounded to the range 0..99 (0x00..0x63); no octet
+         above 0x63 was ever observed.  The mean octet value was ~52.
+      o  Within that range the octets are high-entropy: across 16 reads,
+         most octet positions took a distinct value every time, with no
+         correlation between consecutive reads.
+
+   The per-read regeneration and lack of temporal continuity rule out a
+   sensor stream (which would vary smoothly); the behaviour is that of a
+   per-read NONCE.  Example consecutive reads (note complete change):
+
+      read 1:  32 01 47 24 33 56 05 11 0a 3f 3c 55 48 2f 5b 4e
+      read 2:  2a 16 2e 4e 36 12 5a 0d 13 30 62 10 14 49 04 30
+      read 3:  51 24 11 1f 0e 05 35 58 16 1e 59 18 0e 48 18 37
+
+   The full algorithm was subsequently recovered by static analysis of
+   the SmartThings application (com.samsung.android.oneconnect), which
+   implements this service as its generic BLE-accessory onboarding
+   authentication (shared with Galaxy SmartTag).  The decompiled
+   constants name the characteristics:
+
+      eedd5e73   UUID_SERVICE_AUTHENTICATION
+      a12be31c   UUID_CHAR_NONCE_NORMAL    (plaintext nonce; read above)
+      4ebe81f6   UUID_CHAR_NONCE_ENCRYPT   (encrypted-nonce response)
+
+   Authentication handshake (client = phone, proving knowledge of a
+   per-device key to the ring):
+
+      1.  Read a fresh 16-octet nonce N from a12be31c.
+      2.  Derive a 16-octet AES key from the per-device key DK using a
+          SHA-256-based KDF (single counter block, counter = 1):
+
+             K = SHA-256( DK || 0x00000001 || "bleAuthentication" )[0:16]
+
+      3.  Compute the response by AES-encrypting the fixed ASCII string
+          "smartthings" under K, using the nonce N as the CBC IV:
+
+             R = AES-128/CBC/PKCS5Padding( key = K, IV = N,
+                                           plaintext = "smartthings" )
+
+          (11-octet plaintext, PKCS5-padded to one 16-octet block.)
+      4.  Write R (16 octets) to 4ebe81f6.  The ring validates R and, on
+          success, marks the session established.
+
+   The cipher specification (AES/CBC/PKCS5PADDING, 128-bit key), the
+   literal strings "bleAuthentication" and "smartthings", and the KDF
+   were all taken from decompiled code (classes aj.a "TagKeyManager",
+   wb0.a, wb0.b, xb0.b, xb0.c).
+
+   Key provenance: DK is the per-device "master secret" / Data
+   Encryption Key (DEK).  Static analysis of the SmartThings key
+   hierarchy (class aj.a "TagKeyManager" and the e2ee SharedKeyManager)
+   shows DK is the root from which all per-device keys are derived by
+   the same SHA-256 KDF with domain-separation labels:
+
+      generateBleAuthenticationKey(DK) = b(DK, "bleAuthentication")
+      generateCommandKey(DK, x)        = b(DK, x)
+      generatePrivacyIdKey(DK)         = b(DK, "privacy")
+      generateSigningKey(DK)           = b(DK, "signing")
+      where b(s, label) = SHA-256( s || 0x00000001 || label )[0:16]
+
+   DK itself is delivered to the phone as an encrypted DEK from the
+   Samsung cloud and decrypted by the SmartThings end-to-end-encryption
+   subsystem using a shared key held in the Android KeyStore (a
+   hardware-backed, non-exportable key).  The root of trust is therefore
+   the device KeyStore.
+
+   Security note: the construction is sound.  The nonce/IV is public and
+   the plaintext is constant, but the AES key derives from DK, whose own
+   root of trust is a hardware-backed KeyStore key.  DK is not present in
+   any companion application in plaintext, is not brute-forceable
+   (128-bit, per-device), and was not recoverable by this analysis; a
+   valid response cannot be forged without it.  This protocol was
+   characterised and its algorithm fully reconstructed -- from the
+   on-wire nonce down to the KeyStore root of trust -- but it was NOT
+   defeated, nor is it defeatable without compromising the hardware
+   KeyStore.
+
+B.9.  Wearing-State Detection
+
+   Removing the ring from the finger and replacing it produced the
+   following two Channel 11 frames, confirming Section 7.5 exactly:
+
+      0b 0b 34 37 00      removed   (MSG 52 = 0x34, param 55 = 0x37, 0)
+      0b 0b 34 37 01      on-finger (MSG 52 = 0x34, param 55 = 0x37, 1)
+
+   Two further observations accompanied the transition:
+
+      o  While the ring was off the finger, the standard Heart Rate
+         Measurement characteristic (2a37) reported 0 bpm (loss of skin
+         contact), and resumed a non-zero value once replaced.
+      o  Removal caused the Samsung Health companion to tear down its
+         ring wearable session ("session onDisConnected ... TIME_OUT"),
+         but the underlying BLE link remained connected; wearing state
+         is therefore an application-layer signal independent of the
+         GATT connection.
+
+B.10.  Channel 23 Heartbeat Cadence
+
+   Two consecutive Channel 23 heartbeat frames (17 17 01 03 03) were
+   observed exactly 600 seconds apart, confirming the "approximately
+   every 10 minutes" cadence noted in Section 6.3 to be precisely ten
+   minutes on this firmware.
+
+B.11.  Spurious Gesture Detections
+
+   During handling -- including removing and replacing the ring -- the
+   ring emitted numerous Channel 22 pinch-detection frames (Section 8.5)
+   not corresponding to deliberate double-pinches.  Implementations that
+   act on gesture events SHOULD expect false positives from incidental
+   finger and hand movement, and may wish to debounce or require
+   application context before acting.
+
+B.12.  Secure Command Channel (SmartThings BLE-Accessory Layer)
+
+   Beyond the one-way nonce authentication of B.8, the SmartThings code
+   (classes EncryptManager / pc0.d / aj.a) implements a full MUTUAL
+   authentication and an encrypted command channel over this service.
+   This is the generic SmartThings BLE-accessory secure-control protocol
+   (used for features such as Find-My-style control), distinct from the
+   SAP gesture/health channels of the 1b1b Data Service.  All keys derive
+   from the per-device master secret DK via the single KDF of B.8.
+
+   Phase 1 -- Mutual authentication.  Each party proves possession of DK
+   by AES-encrypting the constant "smartthings" under the BLE auth key
+   K_auth = SHA-256(DK || 0x00000001 || "bleAuthentication")[0:16], using
+   the OTHER party's 16-octet nonce as the CBC IV:
+
+      Client: read device nonce N_D; write
+              AES-CBC( K_auth, IV = N_D, "smartthings" )  to NONCE_ENCRYPT
+      Device: send its nonce N_D and
+              AES-CBC( K_auth, IV = N_E, "smartthings" );
+              client decrypts with the client nonce N_E and verifies the
+              plaintext equals "smartthings".
+
+   N_E is a fresh client nonce (SecureRandom).  The connection is dropped
+   if N_D == N_E (anti-reflection).
+
+   Phase 2 -- Encrypted command channel.  Once secured, both directions
+   use a command key bound to the device nonce:
+
+      K_cmd = SHA-256( DK || 0x00000001 || N_D )[0:16]
+      app->device:  AES-CBC( K_cmd, IV = N_D, LE32(counter) || command )
+      device->app:  AES-CBC decrypt -> LE32(counter) || payload
+
+   A 4-octet little-endian counter is prepended to every message and
+   increments per message, giving ordering and replay protection.  Cipher
+   throughout is AES-128/CBC/PKCS5Padding.
+
+   Phase 3 -- Integrity and freshness.
+
+      Signature:  the low 4 octets of AES-CBC( K_sign, IV = per-device,
+                  data[0:16] ), a 4-octet CBC-MAC, where
+                  K_sign = SHA-256(DK || 0x00000001 || "signing")[0:16].
+      Aging:      a time counter (serverTime - 1593648000) / 900 -- i.e.
+                  15-minute windows from 2020-07-02 -- with +/-1 window
+                  tolerance, rejecting stale or replayed commands beyond
+                  roughly 15 minutes of clock skew.
+
+   The full key hierarchy, all rooted in DK (itself rooted in the device
+   KeyStore, B.8):
+
+      DK --+-- || "bleAuthentication" --> mutual-auth key (B.8/B.12-P1)
+           +-- || N_D                  --> command key      (B.12-P2)
+           +-- || "signing"            --> signing key      (B.12-P3)
+           +-- || "privacy"            --> privacy-ID key   (BLE MAC rotation)
+
+   The design is sound: mutual authentication, per-session command keys
+   bound to a device nonce, monotonic-counter replay protection, a CBC-MAC
+   integrity tag, and time-window freshness -- with all key material
+   derived from a per-device secret whose root of trust is hardware-backed.
 
 
 Authors' Address

@@ -87,9 +87,39 @@ Requires:
 
 ## Battery Impact
 
-SamsungOpenRing does **not** keep gestures enabled 24/7. The trigger system ensures gesture detection is only active when a trigger condition is met (e.g., connected to car Bluetooth). When no trigger is active, the ring operates normally with no additional battery drain.
+The ring's double-pinch detector keeps its motion sensor (IMU) in a high-power,
+always-sampling mode. Samsung's own app only switches this on momentarily (camera
+open, alarm ringing) precisely because leaving it on is the single biggest drain
+on the ring — enough to cut a ~1-week battery down to ~1 day.
 
-BLE connection as a second client adds negligible phone battery usage (~1-2% per day when active).
+SamsungOpenRing therefore takes two precautions:
+
+- **It does not fight Samsung's power management.** When Samsung's app duty-cycles
+  gesture detection off, we respect that instead of immediately re-enabling it.
+  (Older builds re-enabled on every external disable, which pinned the IMU on
+  continuously — the classic "ring dies in a day" bug.)
+- **Gestures stay on only for the genuine trigger window.** Detection is enabled
+  when the first trigger activates and disabled when the last trigger deactivates
+  (e.g. on for your drive while connected to the car, off when you disconnect).
+- **An absolute safety cap bounds a stuck/forgotten window.** A hard ceiling
+  (default 8 h, `DEFAULT_MAX_SESSION_MS` in `GestureService`) — measured from when
+  gestures were first enabled and persisted so it survives reconnects and restarts
+  — disables gestures and stops the service if a window never ends (a forgotten
+  manual session, or a trigger that never fires its OFF edge). It is NOT reset by
+  pinches or repeated trigger activations, so trigger churn can't extend it.
+- **Lower-power BLE.** Our second connection requests
+  `CONNECTION_PRIORITY_LOW_POWER` to relax the connection interval.
+
+Net effect: the feature works across a normal window, while a stuck window can't
+silently pin the ring's sensor for many hours. The second BLE connection itself is
+cheap; it's the IMU, not the radio, that drains the ring.
+
+> **Important:** per Samsung's own rating, gesture use is cheap, and the common
+> "1-week → 1-day" Galaxy Ring drain is usually a hardware/firmware defect (a stuck
+> sensor that Samsung replaces under warranty) or the ring being left out of its
+> charging case — not this app. The debug build's **Claude Bridge** logs the ring's
+> battery %/hour (`RING BATTERY` lines in the event log) so you can run a 24 h A/B
+> (app armed vs fully stopped) and find out for sure.
 
 ## Architecture
 

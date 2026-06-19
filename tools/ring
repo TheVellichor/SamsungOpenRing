@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# ring — drive the Galaxy Ring via the Claude Bridge (debug APK) over ADB.
+#
+# Prereqs: phone connected via USB, USB debugging on, debug APK installed,
+#          Samsung's Galaxy Wearable app keeping the ring bonded.
+#
+# Usage:
+#   ring up                 # install? no — just start the bridge + adb forward
+#   ring start              # start the bridge service on the phone
+#   ring fwd                # adb forward tcp:8787 -> phone loopback
+#   ring status            # connection + battery snapshot
+#   ring connect|disconnect
+#   ring on | off          # enable / disable gesture detection
+#   ring battery           # battery level + drain %/hr  (ring battery/sync to poll)
+#   ring battery/sync
+#   ring events [since]    # raw BLE notification stream (hex + channel)
+#   ring gatt              # discovered services/characteristics
+#   ring log               # full protocol trace (EventLog)
+#   ring write "16 16 00"  # RAW passthrough to TX (UNGUARDED)
+#   ring connpriority low|balanced|high
+#   ring stop              # stop the bridge service
+#
+# RAW write is unguarded by request: reboot/reset/shell/FOTA payloads are
+# reachable. Double-check bytes before sending.
+
+set -euo pipefail
+PORT=8787
+PKG=io.github.thevellichor.samsungopenring.app
+SVC="$PKG/.ClaudeBridgeService"
+BASE="http://127.0.0.1:$PORT"
+
+c() { curl -s --max-time 5 "$@"; echo; }
+
+case "${1:-help}" in
+  start)   adb shell am start-foreground-service -n "$SVC" >/dev/null && echo "bridge started" ;;
+  fwd)     adb forward tcp:$PORT tcp:$PORT && echo "forwarded :$PORT" ;;
+  up)      adb shell am start-foreground-service -n "$SVC" >/dev/null; sleep 1; adb forward tcp:$PORT tcp:$PORT >/dev/null; c "$BASE/status" ;;
+  status)  c "$BASE/status" ;;
+  connect) c -XPOST "$BASE/connect" ;;
+  disconnect) c -XPOST "$BASE/disconnect" ;;
+  on)      c -XPOST "$BASE/gestures/enable" ;;
+  off)     c -XPOST "$BASE/gestures/disable" ;;
+  battery) c "$BASE/battery" ;;
+  battery/sync) c -XPOST "$BASE/battery/sync" ;;
+  events)  c "$BASE/events?since=${2:-0}" ;;
+  gatt)    c "$BASE/gatt" ;;
+  read)    c "$BASE/read?uuid=${2:?uuid prefix required, e.g. 2a29}" ;;
+  log)     c "$BASE/log" ;;
+  write)   c -XPOST "$BASE/write" -d "{\"hex\":\"${2:?hex required}\"}" ;;
+  connpriority) c -XPOST "$BASE/connpriority" -d "{\"priority\":\"${2:?low|balanced|high}\"}" ;;
+  stop)    c -XPOST "$BASE/stop" ;;
+  *) grep '^#' "$0" | sed 's/^# \{0,1\}//' ;;
+esac

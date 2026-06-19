@@ -27,18 +27,33 @@ class TriggerManager(context: Context) {
         override fun onActivated(trigger: Trigger) {
             Log.d(TAG, "Trigger activated: ${trigger.name}")
             activeTriggerCount++
-            if (activeTriggerCount == 1) {
-                GestureService.start(context)
-            }
+            publishActiveCount()
+            // The active WINDOW is owned by this refcount: the first activation
+            // starts the service, and onDeactivated stops it when the count returns
+            // to 0. Gestures stay on for the whole genuine window. start() is
+            // idempotent (it just re-delivers onStartCommand, a no-op), so calling
+            // it on every activation is harmless and cannot extend the service's
+            // absolute safety cap — that ceiling is independent of trigger churn.
+            GestureService.start(context)
         }
 
         override fun onDeactivated(trigger: Trigger) {
             Log.d(TAG, "Trigger deactivated: ${trigger.name}")
             activeTriggerCount = (activeTriggerCount - 1).coerceAtLeast(0)
+            publishActiveCount()
             if (activeTriggerCount == 0) {
                 GestureService.stop(context)
             }
         }
+    }
+
+    /**
+     * Publish the live active-trigger count so GestureService's safety cap can tell
+     * a genuinely-long live window (renew) from a forgotten/manual one (stop).
+     */
+    private fun publishActiveCount() {
+        context.getSharedPreferences(GestureService.ACTIVE_TRIGGERS_PREFS, Context.MODE_PRIVATE)
+            .edit().putInt(GestureService.KEY_ACTIVE_TRIGGERS, activeTriggerCount).apply()
     }
 
     fun armAll() {

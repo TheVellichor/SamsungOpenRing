@@ -26,6 +26,7 @@ internal class RingConnection(
     private var reconnectAttempts = 0
     private val mainHandler = Handler(Looper.getMainLooper())
     private val pendingSubscriptions = mutableListOf<BluetoothGattCharacteristic>()
+    private val readResults = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
 
     val isConnected: Boolean get() = gatt != null && txCharacteristic != null
 
@@ -75,7 +76,55 @@ internal class RingConnection(
         gestureListener = null
     }
 
-    private fun writeCommand(data: ByteArray, label: String) {
+    /** Write arbitrary bytes to the TX characteristic. Raw passthrough used by the debug bridge. */
+    fun writeRaw(data: ByteArray, withResponse: Boolean = false) {
+        writeCommand(data, "RAW", withResponse)
+    }
+
+    /**
+     * Request a BLE connection priority for this client.
+     * Use BluetoothGatt.CONNECTION_PRIORITY_LOW_POWER (2) to relax the connection
+     * interval and reduce radio drain. Returns false if not connected.
+     */
+    fun requestConnectionPriority(priority: Int): Boolean {
+        val g = gatt ?: return false
+        return try {
+            val ok = g.requestConnectionPriority(priority)
+            emit("requestConnectionPriority($priority) -> $ok")
+            ok
+        } catch (e: SecurityException) {
+            emit("requestConnectionPriority error: ${e.message}")
+            false
+        }
+    }
+
+    /** Initiate a GATT read of the first characteristic whose UUID starts with [uuidPrefix]. Safe (read-only). */
+    fun readCharacteristic(uuidPrefix: String): Boolean {
+        val g = gatt ?: return false
+        val target = g.services.flatMap { it.characteristics }
+            .firstOrNull { it.uuid.toString().startsWith(uuidPrefix.lowercase()) } ?: return false
+        readResults.remove(target.uuid.toString())
+        return try { g.readCharacteristic(target) } catch (e: SecurityException) { emit("read err: ${e.message}"); false }
+    }
+
+    /** Latest value read for a characteristic whose UUID starts with [uuidPrefix], or null. */
+    fun getRead(uuidPrefix: String): ByteArray? =
+        readResults.entries.firstOrNull { it.key.startsWith(uuidPrefix.lowercase()) }?.value
+
+    /** Human-readable dump of discovered GATT services/characteristics (debug bridge). */
+    fun gattDump(): String {
+        val g = gatt ?: return "not connected"
+        val sb = StringBuilder()
+        for (svc in g.services) {
+            sb.append("SVC ${svc.uuid}\n")
+            for (c in svc.characteristics) {
+                sb.append("  CHAR ${c.uuid} props=0x${Integer.toHexString(c.properties)} inst=${c.instanceId}\n")
+            }
+        }
+        return sb.toString()
+    }
+
+    private fun writeCommand(data: ByteArray, label: String, withResponse: Boolean = false) {
         val tx = txCharacteristic
         val g = gatt
         if (tx == null || g == null) {
@@ -83,12 +132,14 @@ internal class RingConnection(
             return
         }
 
+        val type = if (withResponse) BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                   else BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
         val hex = data.joinToString(" ") { "%02x".format(it) }
         emit("WRITE -> $label [$hex] on ${tx.uuid.toString().substring(0, 8)}")
 
         try {
-            tx.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
-            g.writeCharacteristic(tx, data, BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE)
+            tx.writeType = type
+            g.writeCharacteristic(tx, data, type)
         } catch (e: SecurityException) {
             emit("WRITE SecurityException: ${e.message}")
         }
@@ -234,6 +285,10 @@ internal class RingConnection(
             }
 
             if (char == null) {
+                // Relax our connection interval to reduce radio drain. We are a
+                // secondary client; gesture/notification latency tolerates the
+                // longer interval. (Effect is device-dependent; harmless if ignored.)
+                requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_LOW_POWER)
                 emit("All CCCD subscriptions complete — connection ready")
                 mainHandler.post { connectionCallback.onConnected() }
                 return
@@ -277,6 +332,13 @@ internal class RingConnection(
             val charShort = char.uuid.toString().substring(0, 8)
             val channelName = if (value.size >= 2) decodeChannel(value[0], value[1]) else null
 
+            // Tap for the debug bridge: see every raw notification regardless of type.
+            OpenRing.rawListener?.invoke(charShort, value)
+
+            // Battery telemetry: log the ring's own battery, tagged with whether we
+            // had gestures enabled, so a drain A/B (app armed vs stopped) is possible.
+            maybeLogBattery(value)
+
             if (RingProtocol.isGestureNotification(value)) {
                 val id = RingProtocol.parseGestureId(value)
                 emit("RECV <- GESTURE DETECTED id=$id [$hex] ch=$channelName char=$charShort")
@@ -294,9 +356,15 @@ internal class RingConnection(
                     emit("RECV <- GESTURE_DISABLE_ACK success=$success [$hex] char=$charShort (our request)")
                     disableRequested = false
                 } else if (gesturesDesired) {
-                    emit("RECV <- GESTURE_DISABLE_ACK success=$success [$hex] char=$charShort (EXTERNAL — Samsung's app disabled us)")
-                    emit("Re-enabling gestures (overriding Samsung's disable)...")
-                    writeCommand(RingProtocol.CMD_ENABLE_GESTURES, "RE-ENABLE_GESTURE")
+                    // Samsung's app duty-cycles gesture detection OFF to save the
+                    // ring's battery (the pinch detector keeps the IMU sampling in a
+                    // high-power mode). We deliberately DO NOT override this anymore:
+                    // re-enabling here created a tug-of-war that pinned the IMU on
+                    // continuously and drained the ring in ~1 day. Respect the disable
+                    // and clear our desire flag; the app layer re-enables on the next
+                    // genuine trigger activation.
+                    emit("RECV <- GESTURE_DISABLE_ACK success=$success [$hex] char=$charShort (EXTERNAL — Samsung disabled gestures; respecting it to save ring battery)")
+                    gesturesDesired = false
                 } else {
                     emit("RECV <- GESTURE_DISABLE_ACK success=$success [$hex] char=$charShort")
                 }
@@ -316,6 +384,27 @@ internal class RingConnection(
             onCharacteristicChanged(g, char, value)
         }
 
+        override fun onCharacteristicRead(
+            g: BluetoothGatt, char: BluetoothGattCharacteristic, value: ByteArray, status: Int
+        ) {
+            val short = char.uuid.toString().substring(0, 8)
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                readResults[char.uuid.toString()] = value
+                emit("READ <- $short [${value.joinToString(" ") { "%02x".format(it) }}]")
+            } else {
+                emit("READ FAIL $short (status=$status)")
+            }
+        }
+
+        @Deprecated("Deprecated in API 33")
+        override fun onCharacteristicRead(
+            g: BluetoothGatt, char: BluetoothGattCharacteristic, status: Int
+        ) {
+            @Suppress("DEPRECATION")
+            val value = char.value ?: ByteArray(0)
+            onCharacteristicRead(g, char, value, status)
+        }
+
         override fun onCharacteristicWrite(
             g: BluetoothGatt, char: BluetoothGattCharacteristic, status: Int
         ) {
@@ -325,6 +414,35 @@ internal class RingConnection(
             } else {
                 emit("WRITE FAILED on $charShort (status=$status)")
             }
+        }
+    }
+
+    /**
+     * Decode CH11 MSG_BATTERY_INFO (0b 0b 02 ...) and emit a structured telemetry
+     * line. Param 5 = battery level (0-100), param 6 = charging. rawHex is always
+     * logged so a wrong offset is visible rather than silently miscounted.
+     */
+    private fun maybeLogBattery(value: ByteArray) {
+        if (value.size < 5) return
+        // Match both the request header 0x02 and the ring's response header 0x42
+        // (confirmed live: the ring replies 0b 0b 42 ... to a 0b 0b 03 sync).
+        if ((value[0].toInt() and 0xFF) != 0x0b ||
+            (value[1].toInt() and 0xFF) != 0x0b ||
+            (value[2].toInt() and 0x3f) != 0x02) return
+
+        var level = -1
+        var charging = false
+        var i = 3
+        while (i + 1 < value.size) {
+            val id = value[i].toInt() and 0xFF
+            val v = value[i + 1].toInt() and 0xFF
+            if (id == 5) level = v
+            if (id == 6) charging = v != 0
+            i += 2
+        }
+        if (level in 0..100) {
+            val hex = value.joinToString(" ") { "%02x".format(it) }
+            emit("RING BATTERY level=$level charging=$charging gestures=$gesturesDesired [$hex]")
         }
     }
 

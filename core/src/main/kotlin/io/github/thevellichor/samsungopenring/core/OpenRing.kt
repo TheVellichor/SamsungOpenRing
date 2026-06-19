@@ -10,6 +10,13 @@ object OpenRing {
     private var connection: RingConnection? = null
     var logger: OpenRingLogger? = null
 
+    /**
+     * Optional tap that receives EVERY raw RX notification as (charShortUuid, bytes).
+     * Set by the debug bridge to stream the full BLE traffic. Read directly by
+     * RingConnection so it survives across (re)connections.
+     */
+    var rawListener: ((charShort: String, value: ByteArray) -> Unit)? = null
+
     val isConnected: Boolean get() = connection?.isConnected == true
 
     fun connect(context: Context, callback: ConnectionCallback) {
@@ -57,4 +64,22 @@ object OpenRing {
         }
         conn.disableGestures()
     }
+
+    /** Raw passthrough write to the ring's TX characteristic (debug bridge). */
+    fun writeRaw(data: ByteArray, withResponse: Boolean = false) {
+        connection?.writeRaw(data, withResponse)
+    }
+
+    /** Request a BLE connection priority (BluetoothGatt.CONNECTION_PRIORITY_*). */
+    fun requestConnectionPriority(priority: Int): Boolean =
+        connection?.requestConnectionPriority(priority) ?: false
+
+    /** Dump discovered GATT services/characteristics, or "not connected". */
+    fun gattDump(): String = connection?.gattDump() ?: "not connected"
+
+    /** Initiate a safe GATT read of a characteristic by UUID prefix (debug bridge). */
+    fun readCharacteristic(uuidPrefix: String): Boolean = connection?.readCharacteristic(uuidPrefix) ?: false
+
+    /** Latest value read for a characteristic UUID prefix, or null (debug bridge). */
+    fun getRead(uuidPrefix: String): ByteArray? = connection?.getRead(uuidPrefix)
 }

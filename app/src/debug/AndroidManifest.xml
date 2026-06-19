@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- DEBUG-ONLY overlay: registers the Claude Bridge (loopback control surface).
+         Merged only into debug builds, so it can never ship in a release APK. -->
+    <application
+        android:name=".ClaudeBridgeApp"
+        tools:replace="android:name">
+
+        <service
+            android:name=".ClaudeBridgeService"
+            android:exported="true"
+            android:foregroundServiceType="connectedDevice" />
+
+    </application>
+</manifest>
