@@ -106,9 +106,9 @@ Table of Contents
 
    The protocol was reverse-engineered through three complementary
    methods.  First, the Galaxy Ring Manager APK
-   (com.samsung.android.ringplugin, hardware version 1401.1019) was
+   (com.samsung.android.ringplugin, version 2.2.16) was
    decompiled using JADX and analyzed statically.  Second, BLE traffic
-   between a Galaxy Ring (SM-Q509, firmware 19.5) and a Galaxy S24 Ultra
+   between a Galaxy Ring (SM-Q509, firmware Q50XWWU2AZA4) and a Galaxy S24 Ultra
    was captured using Android's Bluetooth HCI snoop log facility and
    analyzed with Wireshark.  Third, in June 2026, a live second GATT
    client (connecting alongside the official application) was used to
@@ -166,7 +166,7 @@ Table of Contents
       |  (Gesture, Health, Settings, FOTA, Debug, Find)    |
       +----------------------------------------------------+
       |            Channel Multiplexer                      |
-      |  (Channels 1..31, routed by numeric ID)            |
+      |  (Channels 1..33, routed by numeric ID)            |
       +----------------------------------------------------+
       |            SAP Message Layer                        |
       |  (Header byte, parameter TLV encoding)             |
@@ -401,7 +401,7 @@ Table of Contents
 
 6.1.  Channel Identifiers
 
-   The SAP layer multiplexes up to 31 logical channels over the single
+   The SAP layer multiplexes up to 33 logical channels over the single
    GATT characteristic pair.  Each channel serves a distinct
    application-layer function.  The following channels have been
    identified:
@@ -419,6 +419,7 @@ Table of Contents
       23        (unknown)    Periodic status (~10 min interval) [1]
       31        Find-Device  "Find My Device" (ring locates host)
       32        (unknown)    Account binding, text fields [1]
+      33        Sensor-Raw   Raw PPG/HRM sensor control
 
    [1] Channels 23 and 32 were observed on the wire but are not
    referenced in the decompiled companion application source.  They
@@ -932,8 +933,8 @@ Table of Contents
 11.1.  Overview
 
    Channel 21 carries firmware update (FOTA) data.  The update process
-   is a multi-phase operation involving CRC negotiation, binary
-   transfer, and installation.
+   is a multi-phase operation involving a host-supplied CRC32 integrity
+   check, binary transfer, and installation.
 
 11.2.  Progress States
 
@@ -942,10 +943,10 @@ Table of Contents
       State               Value   Description
       -----               -----   -----------
       IDLE                0       No update in progress.
-      CRC_EXCHANGE        1       CRC checksums are being compared
-                                  between the host and ring to
-                                  determine which blocks need
-                                  transfer.
+      CRC_EXCHANGE        1       A whole-image CRC32 supplied by the
+                                  host is exchanged as an integrity
+                                  check before transfer.  There is no
+                                  block-level differencing.
       COPY_IN_PROGRESS    2       Firmware binary is being
                                   transferred using the large data
                                   protocol (Section 13).
@@ -971,6 +972,12 @@ Table of Contents
    disconnection notifications (Section 7.6).  Firmware binaries are
    transferred using the large data protocol described in Section 13.
 
+   The ring does not verify a cryptographic signature over the firmware
+   image at the transport layer.  Image acceptance is gated only by a
+   container magic value, the host-supplied CRC32, and a size check;
+   firmware authenticity is enforced separately by the ring's bootloader
+   at install time.
+
 
 12.  Debug and Diagnostic Services
 
@@ -993,24 +1000,24 @@ Table of Contents
       5        SENSORDUMP_INIT               Begin sensor dump
       6        SENSORDUMP_TRANSFER           Transfer sensor data
       7        SENSORDUMP_STOP               Halt sensor dump
-      17       GET_HW_VERSION_INFO           Query hardware version
+      9        GET_HW_VERSION_INFO           Query hardware version
       18       GET_TSP_VERSION_INFO           Query TSP version
       30       MSG_READ_CSV_FILE             Read CSV from ring storage
       32       MSG_ACT_CMD_DATA              Action command
       33       MSG_ACT_RING_BAT_STATUS       Battery diagnostics
       34       MSG_HRM_RAW_TRANSFER          Raw heart rate data stream
+      36       FACTORY_RESET                 Factory reset (debug path)
       37       CORE_LOGDUMP_INIT             Core dump initialization
       38       CORE_LOGDUMP_TRANSFER         Core dump transfer
-      39       LOG_LEVEL                     Set logging verbosity
-      40       REBOOT_RING                   Reboot the ring
-      41       FACTORY_RESET                 Factory reset (debug path)
+      39       REBOOT_RING                   Reboot the ring
       43       CORE_LOGDUMP_INIT_V2          Core dump init (v2)
       45       CORE_LOGDUMP_TRANSFER_V2      Core dump transfer (v2)
-      48       ECHO_TEST_MSG                 Echo test (loopback)
-      49       SHELL_COMMAND_MSG             Execute shell command
+      46       RING_MEMORY_INFO_REQ          Query ring memory information
+      49       ECHO_TEST_MSG                 Echo test (loopback)
+      51       SHELL_COMMAND_MSG             Execute shell command
+      54       ON_SENSOR_STATUS_INFO         Query sensor status
+      55       DEBUG_BATTERY_STATISTICS_SYNC Battery statistics
       56       ON_DEMAND_HEALTH_INFO         Trigger health measurement
-      57       ON_SENSOR_STATUS_INFO         Query sensor status
-      58       DEBUG_BATTERY_STATISTICS_SYNC Battery statistics
 
 12.3.  Response Codes
 
@@ -1024,10 +1031,12 @@ Table of Contents
 
 12.4.  Shell Command Interface
 
-   MSG_ID 49 (SHELL_COMMAND_MSG) accepts a shell command string and
+   MSG_ID 51 (SHELL_COMMAND_MSG) accepts a shell command string and
    executes it on the ring's embedded processor.  The command string
-   is sent as a variable-length STRING parameter.  The ring returns
-   command output in a response message.
+   is sent as a variable-length STRING parameter.  The ring executes
+   the command but does NOT return its output over this channel: the
+   response carries only a status byte, and command stdout is routed to
+   a separate console backend (observed empty over BLE).
 
    This interface is gated behind the hidden diagnostic menu and
    is not accessible through normal application flow.  No
@@ -1036,7 +1045,7 @@ Table of Contents
 
 12.5.  Ring Reboot
 
-   MSG_ID 40 (REBOOT_RING) commands the ring to perform an immediate
+   MSG_ID 39 (REBOOT_RING) commands the ring to perform an immediate
    reboot.  The ring disconnects from BLE before rebooting.  No
    confirmation prompt is implemented at the protocol level.
 
@@ -1141,8 +1150,9 @@ Table of Contents
    communications -- including health data, user email addresses, device
    serial numbers, and shell command execution -- depends entirely on
    the strength of the BLE bond.  An attacker who compromises the BLE
-   pairing (through passive eavesdropping of the pairing exchange,
-   exploitation of BLE implementation vulnerabilities, or physical
+   pairing (through an active man-in-the-middle of the Just-Works
+   pairing exchange, exploitation of BLE implementation vulnerabilities,
+   or physical
    access to one of the bonded devices) gains full access to all
    protocol capabilities.
 
@@ -1156,10 +1166,27 @@ Table of Contents
 
    Unauthenticated Debug Commands.  The debug channel (Section 12)
    provides powerful capabilities including shell command execution
-   (MSG_ID 49), device reboot (MSG_ID 40), and factory reset (MSG_ID
-   41).  No authentication mechanism beyond the BLE bond is required
+   (MSG_ID 51), device reboot (MSG_ID 39), and factory reset (MSG_ID
+   36).  No authentication mechanism beyond the BLE bond is required
    to invoke these commands.  Any application with access to the GATT
    characteristics can issue debug commands.
+
+   Open Characteristic Permissions.  The proprietary write and notify
+   characteristics carry no ATT-layer access permissions (no encryption
+   or authentication bit).  The ring dispatches an incoming channel
+   write to its handler unconditionally; only the outbound notification
+   path is gated on an established bond.  Confidentiality and command
+   access therefore rest on the link-layer bond alone, with no defense
+   in depth at the attribute layer.
+
+   Unauthenticated Firmware Transport.  The firmware update channel
+   (Section 11) performs no on-device signature verification of the
+   image; it checks only a container magic value, a host-supplied
+   CRC32, and a size bound.  Authenticity is enforced solely by the
+   ring's bootloader at install time.  A peer able to open a FOTA
+   session can therefore stage arbitrary image bytes; whether those
+   bytes can be made to boot depends on the separate bootloader
+   signature check.
 
    Static Package Allowlist.  The external gesture service (Section
    14.2) restricts access using a hardcoded package name.  Package
