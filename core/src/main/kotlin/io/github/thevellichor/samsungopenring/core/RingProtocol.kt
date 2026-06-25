@@ -8,9 +8,15 @@ internal object RingProtocol {
     val DATA_SERVICE_UUID: UUID = UUID.fromString("00001b1b-0000-1000-8000-00805f9b34fb")
     val FOTA_SERVICE_UUID: UUID = UUID.fromString("00001b1a-0000-1000-8000-00805f9b34fb")
 
-    // GATT Characteristic UUIDs
-    val TX_UUID: UUID = UUID.fromString("797ae4e9-2e58-4fe8-b48d-b5c79599fb9b")
-    val RX_UUID: UUID = UUID.fromString("63e30bad-4206-4596-839f-e47cbf7a4b5d")
+    // GATT Characteristic UUIDs. Firmware RE (and the SM-Q509 protocol RFC, which
+    // notes these were historically published swapped) confirms the roles:
+    //   63e30bad = host->ring WRITE  (Write-Without-Response, props 0x04)
+    //   797ae4e9 = ring->host NOTIFY (Read+Notify, props 0x12)
+    // RingConnection selects the write characteristic by its WRITE_NO_RESPONSE
+    // property rather than by hardcoded UUID (the robust approach); these
+    // constants are retained, correctly labelled, for reference only.
+    val WRITE_CHAR_UUID: UUID = UUID.fromString("63e30bad-4206-4596-839f-e47cbf7a4b5d")
+    val NOTIFY_CHAR_UUID: UUID = UUID.fromString("797ae4e9-2e58-4fe8-b48d-b5c79599fb9b")
 
     // CCCD for enabling notifications
     val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")

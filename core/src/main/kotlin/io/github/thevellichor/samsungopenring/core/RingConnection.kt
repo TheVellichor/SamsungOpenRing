@@ -363,6 +363,13 @@ internal class RingConnection(
                     // continuously and drained the ring in ~1 day. Respect the disable
                     // and clear our desire flag; the app layer re-enables on the next
                     // genuine trigger activation.
+                    //
+                    // Firmware RE corroborates this is the right (and only) host-side
+                    // battery lever: gesture detection rides the accelerometer's WOM
+                    // (wake-on-motion) gate on CH22, so forcing it on bounds the ring's
+                    // IMU duty cycle. The larger consumer — the PPG/SpO2 LED+AFE duty
+                    // cycle — is owned by Samsung Health and is NOT reachable from here,
+                    // so there is nothing further this app can do about it.
                     emit("RECV <- GESTURE_DISABLE_ACK success=$success [$hex] char=$charShort (EXTERNAL — Samsung disabled gestures; respecting it to save ring battery)")
                     gesturesDesired = false
                 } else {
@@ -449,6 +456,8 @@ internal class RingConnection(
     private fun decodeChannel(b0: Byte, b1: Byte): String? {
         if (b0 != b1) return null
         return when (b0.toInt() and 0xFF) {
+            0x01 -> "CH1:Control"
+            0x02 -> "CH2:FindRing"
             0x0a -> "CH10:Health"
             0x0b -> "CH11:Settings"
             0x0c -> "CH12:Debug"
@@ -458,6 +467,7 @@ internal class RingConnection(
             0x17 -> "CH23:Heartbeat"
             0x1f -> "CH31:FindDevice"
             0x20 -> "CH32:Text"
+            0x21 -> "CH33:RawPPG"   // firmware-confirmed: raw PPG/HRM sensor control
             else -> "CH${b0.toInt() and 0xFF}"
         }
     }
