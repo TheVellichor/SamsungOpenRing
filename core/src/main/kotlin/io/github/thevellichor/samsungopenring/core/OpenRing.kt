@@ -82,4 +82,34 @@ object OpenRing {
 
     /** Latest value read for a characteristic UUID prefix, or null (debug bridge). */
     fun getRead(uuidPrefix: String): ByteArray? = connection?.getRead(uuidPrefix)
+
+    /**
+     * Requests a fresh Channel 11 battery report (`0b 0b 03` → MSG_BATTERY_INFO).
+     * Callback runs on the main thread.
+     */
+    fun readBattery(callback: (Result<RingBatteryStatus>) -> Unit) {
+        val conn = connection
+        if (conn == null || !conn.isConnected) {
+            callback(Result.failure(IllegalStateException(OpenRingError.NotConnected.message)))
+            return
+        }
+        conn.requestBatterySync(callback = callback)
+    }
+
+    /**
+     * Factory-resets the ring via Channel 11 MSG_RESET_RING. **Destructive** — erases user
+     * data and clears the bond. Quiesce Samsung companions first ([quiesceSamsungCompanions]).
+     */
+    fun factoryReset(callback: (Result<Boolean>) -> Unit) {
+        val conn = connection
+        if (conn == null || !conn.isConnected) {
+            callback(Result.failure(IllegalStateException(OpenRingError.NotConnected.message)))
+            return
+        }
+        conn.requestFactoryReset(callback = callback)
+    }
+
+    /** Best-effort kill of Samsung Wearable / Ring background processes before exclusive GATT work. */
+    fun quiesceSamsungCompanions(context: Context): RingCompanionQuiescer.QuiesceResult =
+        RingCompanionQuiescer(context).quiesceOnce()
 }

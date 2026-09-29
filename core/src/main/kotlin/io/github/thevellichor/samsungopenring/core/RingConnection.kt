@@ -14,6 +14,30 @@ internal class RingConnection(
         private const val TAG = "OpenRing.Connection"
         private const val RECONNECT_DELAY_MS = 5_000L
         private const val MAX_RECONNECT_ATTEMPTS = 10
+        private const val BATTERY_SYNC_TIMEOUT_MS = 10_000L
+        private const val FACTORY_RESET_TIMEOUT_MS = 15_000L
+    }
+
+    private fun cancelPendingBattery() {
+        pendingBatteryTimeout?.let { mainHandler.removeCallbacks(it) }
+        pendingBatteryTimeout = null
+        pendingBatteryCallback = null
+    }
+
+    private fun cancelPendingReset() {
+        pendingResetTimeout?.let { mainHandler.removeCallbacks(it) }
+        pendingResetTimeout = null
+        pendingResetCallback = null
+    }
+
+    private fun dispatchSettingsNotifications(value: ByteArray) {
+        RingSettingsChannel.parseBattery(value)?.let { battery ->
+            pendingBatteryCallback?.invoke(battery)
+        }
+        val resetAck = RingSettingsChannel.parseResetAck(value)
+        if (resetAck != null) {
+            pendingResetCallback?.invoke(resetAck)
+        }
     }
 
     @Volatile private var gatt: BluetoothGatt? = null
@@ -27,6 +51,11 @@ internal class RingConnection(
     private val mainHandler = Handler(Looper.getMainLooper())
     private val pendingSubscriptions = mutableListOf<BluetoothGattCharacteristic>()
     private val readResults = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
+    private var pendingBatteryCallback: ((RingBatteryStatus) -> Unit)? = null
+    private var pendingBatteryTimeout: Runnable? = null
+    private var pendingResetCallback: ((Boolean) -> Unit)? = null
+    private var pendingResetTimeout: Runnable? = null
+    @Volatile private var factoryResetWriteSent = false
 
     val isConnected: Boolean get() = gatt != null && txCharacteristic != null
 
@@ -110,6 +139,71 @@ internal class RingConnection(
     /** Latest value read for a characteristic whose UUID starts with [uuidPrefix], or null. */
     fun getRead(uuidPrefix: String): ByteArray? =
         readResults.entries.firstOrNull { it.key.startsWith(uuidPrefix.lowercase()) }?.value
+
+    /**
+     * Writes Channel 11 battery sync (`0b 0b 03`) and waits for MSG_BATTERY_INFO on the
+     * notification stream.
+     */
+    fun requestBatterySync(
+        timeoutMs: Long = BATTERY_SYNC_TIMEOUT_MS,
+        callback: (Result<RingBatteryStatus>) -> Unit,
+    ) {
+        mainHandler.post {
+            if (!isConnected) {
+                callback(Result.failure(IllegalStateException(OpenRingError.NotConnected.message)))
+                return@post
+            }
+            cancelPendingBattery()
+            pendingBatteryCallback = { status ->
+                cancelPendingBattery()
+                callback(Result.success(status))
+            }
+            val timeout = Runnable {
+                pendingBatteryCallback = null
+                callback(Result.failure(IllegalStateException("Battery sync timed out")))
+            }
+            pendingBatteryTimeout = timeout
+            mainHandler.postDelayed(timeout, timeoutMs)
+            writeCommand(RingSettingsChannel.batterySyncRequest, "BATTERY_SYNC")
+        }
+    }
+
+    /**
+     * Sends Channel 11 MSG_RESET_RING (destructive). Prefer [RingCompanionQuiescer] and a
+     * short session before calling.
+     */
+    fun requestFactoryReset(
+        timeoutMs: Long = FACTORY_RESET_TIMEOUT_MS,
+        callback: (Result<Boolean>) -> Unit,
+    ) {
+        mainHandler.post {
+            if (!isConnected) {
+                callback(Result.failure(IllegalStateException(OpenRingError.NotConnected.message)))
+                return@post
+            }
+            cancelPendingReset()
+            factoryResetWriteSent = false
+            pendingResetCallback = { accepted ->
+                cancelPendingReset()
+                factoryResetWriteSent = false
+                callback(Result.success(accepted))
+            }
+            val timeout = Runnable {
+                val likelySuccess = factoryResetWriteSent && !isConnected
+                pendingResetCallback = null
+                factoryResetWriteSent = false
+                if (likelySuccess) {
+                    callback(Result.success(true))
+                } else {
+                    callback(Result.failure(IllegalStateException("Factory reset timed out")))
+                }
+            }
+            pendingResetTimeout = timeout
+            mainHandler.postDelayed(timeout, timeoutMs)
+            factoryResetWriteSent = true
+            writeCommand(RingSettingsChannel.resetRingRequest, "FACTORY_RESET")
+        }
+    }
 
     /** Human-readable dump of discovered GATT services/characteristics (debug bridge). */
     fun gattDump(): String {
@@ -230,7 +324,7 @@ internal class RingConnection(
                 return
             }
 
-            emit("Service discovery OK — ${g.services.size} services found")
+            emit("Service discovery OK - ${g.services.size} services found")
 
             var foundTx: BluetoothGattCharacteristic? = null
             for (service in g.services) {
@@ -289,7 +383,7 @@ internal class RingConnection(
                 // secondary client; gesture/notification latency tolerates the
                 // longer interval. (Effect is device-dependent; harmless if ignored.)
                 requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_LOW_POWER)
-                emit("All CCCD subscriptions complete — connection ready")
+                emit("All CCCD subscriptions complete - connection ready")
                 mainHandler.post { connectionCallback.onConnected() }
                 return
             }
@@ -335,6 +429,8 @@ internal class RingConnection(
             // Tap for the debug bridge: see every raw notification regardless of type.
             OpenRing.rawListener?.invoke(charShort, value)
 
+            dispatchSettingsNotifications(value)
+
             // Battery telemetry: log the ring's own battery, tagged with whether we
             // had gestures enabled, so a drain A/B (app armed vs stopped) is possible.
             maybeLogBattery(value)
@@ -367,10 +463,10 @@ internal class RingConnection(
                     // Firmware RE corroborates this is the right (and only) host-side
                     // battery lever: gesture detection rides the accelerometer's WOM
                     // (wake-on-motion) gate on CH22, so forcing it on bounds the ring's
-                    // IMU duty cycle. The larger consumer — the PPG/SpO2 LED+AFE duty
-                    // cycle — is owned by Samsung Health and is NOT reachable from here,
+                    // IMU duty cycle. The larger consumer - the PPG/SpO2 LED+AFE duty
+                    // cycle - is owned by Samsung Health and is NOT reachable from here,
                     // so there is nothing further this app can do about it.
-                    emit("RECV <- GESTURE_DISABLE_ACK success=$success [$hex] char=$charShort (EXTERNAL — Samsung disabled gestures; respecting it to save ring battery)")
+                    emit("RECV <- GESTURE_DISABLE_ACK success=$success [$hex] char=$charShort (EXTERNAL - Samsung disabled gestures; respecting it to save ring battery)")
                     gesturesDesired = false
                 } else {
                     emit("RECV <- GESTURE_DISABLE_ACK success=$success [$hex] char=$charShort")
@@ -430,27 +526,12 @@ internal class RingConnection(
      * logged so a wrong offset is visible rather than silently miscounted.
      */
     private fun maybeLogBattery(value: ByteArray) {
-        if (value.size < 5) return
-        // Match both the request header 0x02 and the ring's response header 0x42
-        // (confirmed live: the ring replies 0b 0b 42 ... to a 0b 0b 03 sync).
-        if ((value[0].toInt() and 0xFF) != 0x0b ||
-            (value[1].toInt() and 0xFF) != 0x0b ||
-            (value[2].toInt() and 0x3f) != 0x02) return
-
-        var level = -1
-        var charging = false
-        var i = 3
-        while (i + 1 < value.size) {
-            val id = value[i].toInt() and 0xFF
-            val v = value[i + 1].toInt() and 0xFF
-            if (id == 5) level = v
-            if (id == 6) charging = v != 0
-            i += 2
-        }
-        if (level in 0..100) {
-            val hex = value.joinToString(" ") { "%02x".format(it) }
-            emit("RING BATTERY level=$level charging=$charging gestures=$gesturesDesired [$hex]")
-        }
+        val battery = RingSettingsChannel.parseBattery(value) ?: return
+        val hex = value.joinToString(" ") { "%02x".format(it) }
+        emit(
+            "RING BATTERY level=${battery.level} charging=${battery.charging} " +
+                "gestures=$gesturesDesired [$hex]",
+        )
     }
 
     private fun decodeChannel(b0: Byte, b1: Byte): String? {

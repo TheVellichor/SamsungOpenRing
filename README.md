@@ -1,6 +1,6 @@
 # SamsungOpenRing
 
-> **This is an independent hobby project by a tinkerer who wanted more from his Galaxy Ring.** Samsung's double-pinch gesture is limited to two hardcoded actions (camera shutter and alarm dismiss). This project unlocks that gesture for whatever you want — open your parking gate, control your smart home, trigger automations, or anything else a webhook can reach. It is built for personal use and educational exploration of BLE protocols. Not affiliated with Samsung. No warranty. Use at your own risk.
+> **This is an independent hobby project by a tinkerer who wanted more from his Galaxy Ring.** Samsung's double-pinch gesture is limited to two hardcoded actions (camera shutter and alarm dismiss). This project unlocks that gesture for whatever you want - open your parking gate, control your smart home, trigger automations, or anything else a webhook can reach. It is built for personal use and educational exploration of BLE protocols. Not affiliated with Samsung. No warranty. Use at your own risk.
 
 Open-source SDK and companion app for the Samsung Galaxy Ring. Enables custom gesture-triggered actions without Samsung's official SDK.
 
@@ -90,21 +90,21 @@ Requires:
 The ring's double-pinch detector keeps its motion sensor (IMU) in a high-power,
 always-sampling mode. Samsung's own app only switches this on momentarily (camera
 open, alarm ringing) precisely because leaving it on is the single biggest drain
-on the ring — enough to cut a ~1-week battery down to ~1 day.
+on the ring - enough to cut a ~1-week battery down to ~1 day.
 
 SamsungOpenRing therefore takes two precautions:
 
 - **It does not fight Samsung's power management.** When Samsung's app duty-cycles
   gesture detection off, we respect that instead of immediately re-enabling it.
   (Older builds re-enabled on every external disable, which pinned the IMU on
-  continuously — the classic "ring dies in a day" bug.)
+  continuously - the classic "ring dies in a day" bug.)
 - **Gestures stay on only for the genuine trigger window.** Detection is enabled
   when the first trigger activates and disabled when the last trigger deactivates
   (e.g. on for your drive while connected to the car, off when you disconnect).
 - **An absolute safety cap bounds a stuck/forgotten window.** A hard ceiling
-  (default 8 h, `DEFAULT_MAX_SESSION_MS` in `GestureService`) — measured from when
+  (default 8 h, `DEFAULT_MAX_SESSION_MS` in `GestureService`) - measured from when
   gestures were first enabled and persisted so it survives reconnects and restarts
-  — disables gestures and stops the service if a window never ends (a forgotten
+  - disables gestures and stops the service if a window never ends (a forgotten
   manual session, or a trigger that never fires its OFF edge). It is NOT reset by
   pinches or repeated trigger activations, so trigger churn can't extend it.
 - **Lower-power BLE.** Our second connection requests
@@ -117,7 +117,7 @@ cheap; it's the IMU, not the radio, that drains the ring.
 > **Important:** per Samsung's own rating, gesture use is cheap, and the common
 > "1-week → 1-day" Galaxy Ring drain is usually a hardware/firmware defect (a stuck
 > sensor that Samsung replaces under warranty) or the ring being left out of its
-> charging case — not this app. The debug build's **Claude Bridge** logs the ring's
+> charging case - not this app. The debug build's **Claude Bridge** logs the ring's
 > battery %/hour (`RING BATTERY` lines in the event log) so you can run a 24 h A/B
 > (app armed vs fully stopped) and find out for sure.
 
@@ -133,8 +133,22 @@ SamsungOpenRing/
 
 - `OpenRing` -- public API entry point
 - `RingConnection` -- BLE GATT client with auto-reconnect
-- `RingProtocol` -- Samsung SAP message encoding/decoding
+- `RingProtocol` -- Samsung SAP message encoding/decoding (Channel 22 gestures)
+- `RingSettingsChannel` -- Channel 11 battery sync and factory-reset framing/parsers
+- `RingCompanionQuiescer` -- best-effort pause of Galaxy Wearable / Ring plugin before exclusive GATT work
 - `RingScanner` -- finds bonded Galaxy Ring from paired devices
+
+**Second client vs Galaxy Wearable:** Wearable and `ringplugin` can hold GATT during
+reset. Call `OpenRing.quiesceSamsungCompanions(context)` before `OpenRing.factoryReset`.
+Do not permanently disable those packages on daily-driver phones — pairing requires
+Wearable. See RFC-SGR-001 Appendix C and [BATTERY.md](docs/BATTERY.md).
+
+Optional Channel 11 APIs (destructive reset is opt-in):
+
+```kotlin
+OpenRing.readBattery { result -> … }
+OpenRing.factoryReset { result -> … }  // erases user data; clears bond
+```
 
 ### Companion App (`:app`)
 
