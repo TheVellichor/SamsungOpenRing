@@ -19,8 +19,13 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
 }
 
 dependencies {
     implementation(libs.coroutines.android)
+    testImplementation("junit:junit:4.13.2")
 }

@@ -1592,6 +1592,36 @@ B.12.  Secure Command Channel (SmartThings BLE-Accessory Layer)
    derived from a per-device secret whose root of trust is hardware-backed.
 
 
+Appendix C.  Second-Client Refurb / Exclusive Operations (informative)
+
+   Independent validation on Samsung refurb tablets (second GATT client alongside
+   Galaxy Wearable, production OpenRing-style session caps) confirms:
+
+   C.1.  Factory reset (Channel 11 MSG_RESET_RING, id 33)
+
+      o  Write the doubled envelope `0x0b 0x0b 0x21` (msg id 33 in the third octet).
+      o  Acknowledgement arrives on the notification stream with the same msg id in
+         the third octet (often `0x21` on the wire).  Status octet at index 4:
+         `0x00` = success, non-zero = explicit failure.
+      o  Payloads shorter than five octets must not be interpreted as an explicit NACK.
+      o  If the link drops or times out after the write, treat reset as likely
+         initiated (bond cleared on success).
+
+   C.2.  Companion exclusivity (host-side, no root)
+
+      o  Galaxy Wearable and `com.samsung.android.ringplugin` can hold the primary
+         GATT session.  Before exclusive reset, kill background processes for Wearable
+         and Ring plugin (`ActivityManager.killBackgroundProcesses`), or have the
+         operator force-stop both apps in Settings.
+      o  Do **not** permanently `pm disable` ring packages on operator hosts: pairing
+         the next ring requires Wearable enabled.
+
+   C.3.  Multi-unit refurb loop
+
+      o  After a verified factory reset, the BLE bond is cleared; the operator must
+         pair the next unit through Galaxy Wearable before a second client can connect.
+
+
 Authors' Address
 
    Nikita Viventsov

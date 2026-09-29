@@ -1,11 +1,11 @@
-# Galaxy Ring Battery — Diagnosis & Longevity Plan
+# Galaxy Ring Battery - Diagnosis & Longevity Plan
 
 Why the ring drains, what was actually measured, and a ranked plan to make it last
 as long as possible.
 
 ## TL;DR
 
-- **Gesture detection is cheap** — Samsung rates the ring ~7 days *including* gesture
+- **Gesture detection is cheap** - Samsung rates the ring ~7 days *including* gesture
   use. Do not over-optimise gestures.
 - **The dominant drain is continuous biometric sensing** (heart rate, SpO2, skin
   temperature, stress), plus leaving the ring **out of its charging case**.
@@ -16,7 +16,7 @@ as long as possible.
 ## What we measured
 
 During the live session the ring fell **63% → 52% over ~50 minutes** (≈10%/hr). That
-number is **not** representative of normal wear — it was inflated by:
+number is **not** representative of normal wear - it was inflated by:
 
 - our **second** BLE connection (alongside Samsung's), and
 - constant active probing (reads/writes every few seconds), and
@@ -28,32 +28,32 @@ session's ~10%/hr reflects active debugging, not the user's real-world drain.
 Other measured facts relevant to power:
 - The ring measures **heart rate continuously** (live HR seen the whole session;
   HR → 0 only when removed). Continuous optical HR is the single biggest sensor draw.
-- The Channel 23 heartbeat fires only every 600 s — negligible.
+- The Channel 23 heartbeat fires only every 600 s - negligible.
 - Removing the ring tears down Samsung Health's wearable session and stops HR.
 
 ## Ranked optimisation plan
 
-### Tier 1 — biggest levers
+### Tier 1 - biggest levers
 1. **Store the ring in its charging case whenever it is off your finger.** Out of the
    case the sensors keep running on nothing; in the case they idle and top up.
 2. **Heart Rate → manual/periodic** (Samsung Health → Ring → Heart rate). Continuous
    optical HR is the #1 sensor drain.
-3. **Blood Oxygen (SpO2) during sleep → off** if unused — it runs all night.
+3. **Blood Oxygen (SpO2) during sleep → off** if unused - it runs all night.
 
-### Tier 2 — meaningful
+### Tier 2 - meaningful
 4. Disable **skin temperature**, **continuous stress**, and **snore detection** if not
    needed.
-5. If you own a **Galaxy Watch, wear both** — Samsung quotes ~+30% ring life because
+5. If you own a **Galaxy Watch, wear both** - Samsung quotes ~+30% ring life because
    the watch takes over sensing and the ring duty-cycles down.
 
-### Tier 3 — app / second-client (mostly already handled)
+### Tier 3 - app / second-client (mostly already handled)
 6. **Do not run a second BLE client** against the ring continuously (the debug bridge,
-   for example) — measured to add real drain.
+   for example) - measured to add real drain.
 7. The production `SamsungOpenRing` app is fixed: no gesture-pinning, respects
    Samsung's power-saving, `CONNECTION_PRIORITY_LOW_POWER`, and an absolute 8 h session
    cap. Keep triggers to short edge-events.
 
-### Tier 4 — rule out the hardware fault
+### Tier 4 - rule out the hardware fault
 8. If, after Tier 1–2 *and* with our app off, it still dies in ~a day, it is very
    likely the **known stuck-sensor fault** → Samsung warranty replacement. Keep
    firmware current (and note a recent firmware update is itself a known regression
@@ -61,7 +61,7 @@ Other measured facts relevant to power:
 
 ## How to verify (the 24 h A/B)
 
-Don't guess — measure:
+Don't guess - measure:
 
 1. Apply Tier 1 settings; make sure no second BLE client (bridge) is running.
 2. Note the ring % in Samsung Health.
@@ -73,6 +73,18 @@ Don't guess — measure:
 The debug bridge can log the ring's `RING BATTERY level=NN` over time (Channel 11
 `0b 0b 03` sync) for a finer-grained attribution, but for an unattended day the
 Samsung Health % at start/end is sufficient and reliable.
+
+## Channel 11 API (`:core`)
+
+Production apps can request battery without the debug bridge:
+
+- `OpenRing.readBattery { result -> … }` — writes `0b 0b 03` and parses
+  MSG_BATTERY_INFO (TLV tags 5 = level, 6 = charging). See `RingSettingsChannel`.
+- `OpenRing.factoryReset { … }` — **destructive** MSG_RESET_RING (id 33). Call
+  `OpenRing.quiesceSamsungCompanions(context)` first so Galaxy Wearable is not
+  holding GATT. Keep the existing 8 h session cap and low-power connection priority.
+
+Unit tests for wire parsers live in `RingSettingsChannelTest`.
 
 ## App-side fixes shipped (for reference)
 
